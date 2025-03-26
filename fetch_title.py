@@ -21,9 +21,4 @@ def generate_caption_and_description(text):
     
     return caption, description
 
-if __name__ == "__main__":
-    text_to_process = "I've rented from the same place for over a year now an it's been good but so far the landlord asks for rent early almost every month.. now he wants me to give it to my roomate to give to him which is ok. My roomate told me at the beginning  of the month an told me 2 days ago, but it was still over a week an said ok just hsve it by next week (the 1st  ) but yesterday  he told me he is seeing him today an wanted it in cash which made me feel weird but I did it. I had the cash but told him I needed more of a heads up . I'm ok but it does change my plans for things an paying for other stuff since my pay day is Friday. I've been late by rent 1 or 2 days but that's it. An always with clear communication.  I dunno I feel angry the more I think of this and I just want to know AITA  for feeling like this. I want to say something  but I'm nervous  an idk if I'm just being an ass.."
-    caption, description = generate_caption_and_description(text_to_process)
-    
-    print("Caption:", caption)
-    print("Description:", description)
+
