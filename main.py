@@ -150,8 +150,8 @@ for seg in sentence_segments:
         color='white',
         font='Arial-Bold',   # or another bold font installed on your system
         method='caption',
-        size=background_clip.size,
-        bg_color='black',
+        # size=background_clip.size,
+        # bg_color='black',
         stroke_color='black',
         stroke_width=2
     ).set_start(seg['start']) \
