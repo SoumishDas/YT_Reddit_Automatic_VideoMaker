@@ -1,15 +1,3 @@
-import os
-import random
-import glob
-import nltk
-from gtts import gTTS
-import praw
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, AudioFileClip
-
-# Download NLTK tokenizer data (only needed the first time)
-nltk.download('punkt_tab')
-from nltk.tokenize import sent_tokenize
-
 auth = {
     "client_id":"3latcVZ4rfd6xckc1dUb-w",
     "client_secret":"bNVZTSipGUudAsn7rRIkIgXzN9FzYA",
@@ -18,85 +6,170 @@ auth = {
     "refresh_token":"507366339643-9HR-TVngknaPEv820WBGUAX2eyU_lg"
 }
 
-### 1. Scrape a Reddit Post Using PRAW ###
-# Replace with your own Reddit API credentials
-reddit = praw.Reddit(
-    client_id=auth.get("client_id"),
-    client_secret=auth.get("client_secret"),
-    user_agent='Yt_channel_AITA_Scraper',
+import os
+import subprocess
+import random
+import glob
+import nltk
+from nltk.tokenize import sent_tokenize
+
+import praw
+from moviepy.editor import (
+    VideoFileClip,
+    AudioFileClip,
+    concatenate_audioclips,
+    TextClip,
+    CompositeVideoClip
 )
 
-# Choose the subreddit (in this case, "AmItheAsshole") and fetch one post
+##################################
+# 1. Configuration
+##################################
+
+# (A) Reddit credentials
+REDDIT_CLIENT_ID = '3latcVZ4rfd6xckc1dUb-w'
+REDDIT_CLIENT_SECRET = 'bNVZTSipGUudAsn7rRIkIgXzN9FzYA'
+REDDIT_USER_AGENT = 'Yt_channel_AITA_Scraper'
+
+# (B) Piper CLI settings
+PIPER_MODEL_NAME = "en_US-amy-medium"  # Or full path if needed
+OUTPUT_DIR = "audio_sentences"        # Where to store per-sentence WAV files
+
+# (C) Paths/Filenames
+BACKGROUND_VIDEOS_FOLDER = "background_videos"
+VIDEO_OUTPUT_FILE = "final_output.mp4"
+
+# Download NLTK data for sentence tokenization (only needed once)
+nltk.download('punkt')
+
+##################################
+# 2. Setup and Functions
+##################################
+
+def generate_wav_from_text(text, output_wav):
+    """
+    Uses Piper via subprocess to generate a WAV for the given text.
+    The text is passed via stdin to Piper, which writes to output_wav.
+    """
+    # We'll use the subprocess.run approach with `input=...` to avoid shell quoting issues
+    command = [
+        "piper",
+        "--model", PIPER_MODEL_NAME,
+        "--output_file", output_wav
+    ]
+    subprocess.run(command, input=text.encode("utf-8"), check=True)
+
+##################################
+# 3. Fetch a Reddit Post
+##################################
+
+reddit = praw.Reddit(
+    client_id=REDDIT_CLIENT_ID,
+    client_secret=REDDIT_CLIENT_SECRET,
+    user_agent=REDDIT_USER_AGENT
+)
+
 subreddit = reddit.subreddit('AmItheAsshole')
-post = next(subreddit.hot(limit=1))
-# Combine title and body text
+post = next(subreddit.new(limit=1))  # Get the newest post
 text_content = f"{post.title}\n\n{post.selftext}"
+
 print("Fetched Post:")
 print(text_content)
 
-### 2. Generate Narration Audio with gTTS ###
-# We use Google TTS for narration generation
-tts = gTTS(text=text_content, lang='en')
-audio_file = 'narration.mp3'
-tts.save(audio_file)
-print(f"Narration saved as {audio_file}")
+##################################
+# 4. Split into Sentences
+##################################
 
-### 3. Select a Background Video ###
-# Assumes you have MP4 files in a folder named 'background_videos'
-video_files = glob.glob(os.path.join('background_videos', '*.mp4'))
+sentences = sent_tokenize(text_content)
+if not sentences:
+    raise ValueError("No sentences found in the post.")
+
+# Create output directory for sentence WAVs
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+##################################
+# 5. Generate WAV for Each Sentence and Collect Durations
+##################################
+
+audio_clips = []
+sentence_segments = []
+current_start = 0.0
+
+for i, sentence in enumerate(sentences, start=1):
+    # 1) Generate WAV for this sentence
+    wav_filename = os.path.join(OUTPUT_DIR, f"sentence_{i}.wav")
+    generate_wav_from_text(sentence, wav_filename)
+    
+    # 2) Load the WAV to get its duration
+    clip = AudioFileClip(wav_filename)
+    duration = clip.duration
+    
+    # 3) Store the audio clip in a list for concatenation later
+    audio_clips.append(clip)
+    
+    # 4) Keep track of start time/duration for text overlay
+    sentence_segments.append({
+        'text': sentence,
+        'start': current_start,
+        'duration': duration
+    })
+    
+    # 5) Update the timeline
+    current_start += duration
+
+##################################
+# 6. Concatenate All Audio Clips
+##################################
+
+final_audio = concatenate_audioclips(audio_clips)
+total_audio_duration = final_audio.duration
+print(f"Total narration length: {total_audio_duration:.2f} seconds")
+
+##################################
+# 7. Choose a Background Video
+##################################
+
+video_files = glob.glob(os.path.join(BACKGROUND_VIDEOS_FOLDER, '*.mp4'))
 if not video_files:
-    raise Exception("No background videos found in the 'background_videos' folder.")
+    raise FileNotFoundError(f"No MP4 files found in '{BACKGROUND_VIDEOS_FOLDER}'.")
+
 bg_video_file = random.choice(video_files)
 print(f"Selected background video: {bg_video_file}")
-background = VideoFileClip(bg_video_file)
 
-### 4. Estimate Timing for Text Segments ###
-# Split the full text into sentences
-sentences = sent_tokenize(text_content)
+background_clip = VideoFileClip(bg_video_file).set_duration(total_audio_duration)
 
-# Load the generated narration audio to determine its duration
-audio_clip = AudioFileClip(audio_file)
-audio_duration = audio_clip.duration
+##################################
+# 8. Create Text Overlays
+##################################
 
-# Calculate total word count to proportionally assign durations
-total_words = sum(len(sentence.split()) for sentence in sentences)
-
-# Create timing info for each sentence (naively assigning duration based on word count)
-segments = []
-current_time = 0.0
-for sentence in sentences:
-    word_count = len(sentence.split())
-    # Proportionally determine the segment duration relative to the full audio length
-    segment_duration = (word_count / total_words) * audio_duration
-    segments.append({'text': sentence, 'start': current_time, 'duration': segment_duration})
-    current_time += segment_duration
-
-### 5. Create Text Overlays Synchronized with the Audio ###
 text_clips = []
-for segment in segments:
-    # Create a text clip for each sentence. Adjust fontsize and method as needed.
+for seg in sentence_segments:
     txt_clip = TextClip(
-        segment['text'], 
-        fontsize=24, 
-        color='white', 
-        method='caption', 
-        size=background.size, 
-        align='center'
-    )
-    # Set when the text appears and how long it stays on screen
-    txt_clip = txt_clip.set_start(segment['start']).set_duration(segment['duration']).set_position('center')
+        seg['text'],
+        fontsize=48,         # Adjust for larger/smaller text
+        color='white',
+        font='Arial-Bold',   # or another bold font installed on your system
+        method='caption',
+        size=background_clip.size,
+        bg_color='black',
+        stroke_color='black',
+        stroke_width=2
+    ).set_start(seg['start']) \
+     .set_duration(seg['duration']) \
+     .set_position('center')
+    
     text_clips.append(txt_clip)
 
-### 6. Composite the Final Video ###
-# Adjust the background video duration to match the narration audio
-video = background.set_duration(audio_duration)
-# Combine background and all text clips
-final_video = CompositeVideoClip([video] + text_clips)
-# Add the narration audio
-final_video = final_video.set_audio(audio_clip)
+##################################
+# 9. Composite Final Video
+##################################
 
-# Output file name
-output_file = "final_output.mp4"
-final_video.write_videofile(output_file, fps=24)
+final_video = CompositeVideoClip([background_clip] + text_clips)
+final_video = final_video.set_audio(final_audio)
 
-print(f"Video created successfully: {output_file}")
+##################################
+# 10. Export the Final Video
+##################################
+
+final_video.write_videofile(VIDEO_OUTPUT_FILE, fps=24)
+print(f"Video created: {VIDEO_OUTPUT_FILE}")

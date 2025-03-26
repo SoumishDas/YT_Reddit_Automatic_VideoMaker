@@ -1,0 +1,4 @@
+piper-tts
+nltk
+praw
+moviepy==1.0
