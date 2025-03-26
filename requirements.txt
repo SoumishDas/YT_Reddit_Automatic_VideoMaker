@@ -2,3 +2,5 @@ piper-tts
 nltk
 praw
 moviepy==1.0
+google-generativeai==0.3.2
+
