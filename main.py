@@ -38,7 +38,7 @@ OUTPUT_DIR = "audio_sentences"        # Where to store per-sentence WAV files
 CHUNK_SIZE = 5  # Number of words per chunk (example)
 
 # (C) Paths/Filenames
-BACKGROUND_VIDEOS_FOLDER = "background_videos"
+BACKGROUND_VIDEOS_FOLDER = "videos"
 VIDEO_OUTPUT_FILE = "final_output.mp4"
 
 # Download NLTK data for sentence tokenization (only needed once)
