@@ -11,7 +11,7 @@ import subprocess
 import random
 import glob
 import nltk
-from nltk.tokenize import sent_tokenize
+from nltk.tokenize import sent_tokenize,word_tokenize
 
 import praw
 from moviepy.editor import (
@@ -35,12 +35,14 @@ REDDIT_USER_AGENT = 'Yt_channel_AITA_Scraper'
 PIPER_MODEL_NAME = "en_US-amy-medium"  # Or full path if needed
 OUTPUT_DIR = "audio_sentences"        # Where to store per-sentence WAV files
 
+CHUNK_SIZE = 5  # Number of words per chunk (example)
+
 # (C) Paths/Filenames
 BACKGROUND_VIDEOS_FOLDER = "background_videos"
 VIDEO_OUTPUT_FILE = "final_output.mp4"
 
 # Download NLTK data for sentence tokenization (only needed once)
-nltk.download('punkt')
+nltk.download('punkt_tab')
 
 ##################################
 # 2. Setup and Functions
@@ -58,6 +60,22 @@ def generate_wav_from_text(text, output_wav):
         "--output_file", output_wav
     ]
     subprocess.run(command, input=text.encode("utf-8"), check=True)
+
+def chunk_sentence_words(sentence, chunk_size):
+    """
+    Splits a sentence into chunks of 'chunk_size' words each.
+    E.g., for 10 words and chunk_size=5, 
+    returns [ "word1 word2 word3 word4 word5", "word6 word7 word8 word9 word10" ]
+    """
+    words = word_tokenize(sentence)
+    # Group words in increments of chunk_size
+    chunks = []
+    for i in range(0, len(words), chunk_size):
+        chunk_words = words[i:i + chunk_size]
+        chunk_text = " ".join(chunk_words)
+        chunks.append(chunk_text)
+    return chunks
+
 
 ##################################
 # 3. Fetch a Reddit Post
@@ -92,7 +110,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 ##################################
 
 audio_clips = []
-sentence_segments = []
+text_segments = []
 current_start = 0.0
 
 for i, sentence in enumerate(sentences, start=1):
@@ -107,14 +125,30 @@ for i, sentence in enumerate(sentences, start=1):
     # 3) Store the audio clip in a list for concatenation later
     audio_clips.append(clip)
     
-    # 4) Keep track of start time/duration for text overlay
-    sentence_segments.append({
-        'text': sentence,
-        'start': current_start,
-        'duration': duration
-    })
+        # --- Split the sentence text into smaller chunks ---
+    # e.g., first 5 words for half the time, next 5 words for the second half
+    # We'll do a naive approach: total words = sum of all chunk words
+    # Then chunk time = (chunk_word_count / total_word_count) * sentence_duration
+    chunks = chunk_sentence_words(sentence, CHUNK_SIZE)
     
-    # 5) Update the timeline
+    total_words = sum(len(word_tokenize(ch)) for ch in chunks)
+    
+    # We'll track the local start time for this sentence's overlay (relative to the entire video)
+    local_time = current_start
+    
+    for chunk in chunks:
+        chunk_word_count = len(word_tokenize(chunk))
+        chunk_duration = (chunk_word_count / total_words) * duration
+        
+        text_segments.append({
+            'text': chunk,
+            'start': local_time,
+            'duration': chunk_duration
+        })
+        
+        local_time += chunk_duration
+    
+    # Advance the global timeline by this sentence's total duration
     current_start += duration
 
 ##################################
@@ -143,7 +177,7 @@ background_clip = VideoFileClip(bg_video_file).set_duration(total_audio_duration
 ##################################
 
 text_clips = []
-for seg in sentence_segments:
+for seg in text_segments:
     txt_clip = TextClip(
         seg['text'],
         fontsize=48,         # Adjust for larger/smaller text
