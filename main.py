@@ -182,13 +182,12 @@ for seg in text_segments:
         seg['text'],
         fontsize=48,         # Adjust for larger/smaller text
         color='white',
-        font='Arial-Bold',   # or another bold font installed on your system 
-        # Montserrat
+        font='Montserrat',   # or another bold font installed on your system 
         method='caption',
         # size=background_clip.size,
         # bg_color='black',
         stroke_color='black',
-        stroke_width=8
+        stroke_width=5
     ).set_start(seg['start']) \
      .set_duration(seg['duration']) \
      .set_position('center')
