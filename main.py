@@ -180,14 +180,14 @@ text_clips = []
 for seg in text_segments:
     txt_clip = TextClip(
         seg['text'],
-        fontsize=48,         # Adjust for larger/smaller text
+        fontsize=60,         # Adjust for larger/smaller text
         color='white',
         font='montserrat',   # or another bold font installed on your system 
         method='caption',
         size=(int(background_clip.size[0] * 0.6), None),
         # bg_color='black',
         stroke_color='black',
-        stroke_width=5
+        stroke_width=3
     ).set_start(seg['start']) \
      .set_duration(seg['duration']) \
      .set_position('center')
