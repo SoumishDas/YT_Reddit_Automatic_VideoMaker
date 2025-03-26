@@ -182,9 +182,9 @@ for seg in text_segments:
         seg['text'],
         fontsize=48,         # Adjust for larger/smaller text
         color='white',
-        font='Montserrat',   # or another bold font installed on your system 
+        font='montserrat',   # or another bold font installed on your system 
         method='caption',
-        # size=background_clip.size,
+        size=(int(background_clip.size[0] * 0.6), None),
         # bg_color='black',
         stroke_color='black',
         stroke_width=5
