@@ -1,7 +1,14 @@
 import google.generativeai as genai
+import os
+from dotenv import load_dotenv
 
-# Set up your API key
-genai.configure(api_key="")
+# Load environment variables from .env file
+load_dotenv()
+
+# Retrieve API key from environment variables
+api_key = os.getenv("API_KEY")
+
+genai.configure(api_key=api_key)
 
 # Initialize the model
 model = genai.GenerativeModel("gemini-1.5-pro")
@@ -22,3 +29,10 @@ def generate_caption_and_description(text):
     return caption, description
 
 
+# TEST JUST IN CASE WE NEED IT LATER
+
+# Test the function
+# text = "The quick brown fox jumps over the lazy dog."
+# caption, description = generate_caption_and_description(text)
+# print("Caption:", caption)
+# print("Description:", description)
