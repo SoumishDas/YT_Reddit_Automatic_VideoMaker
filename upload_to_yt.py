@@ -25,7 +25,8 @@ def get_authenticated_service():
         CLIENT_SECRETS_FILE, scopes)
     
     # Run the OAuth flow in the console. This will open a URL for the user to authenticate.
-    credentials = flow.run_console()
+    credentials = flow.run_local_server(port=0, open_browser=True)
+
     
     # Build and return the YouTube API service using the obtained credentials.
     return googleapiclient.discovery.build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
