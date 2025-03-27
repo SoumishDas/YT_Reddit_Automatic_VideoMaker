@@ -4,3 +4,4 @@ background_videos/*
 audio_sentences/*
 .env
 videos/*
+client_secrets.json
