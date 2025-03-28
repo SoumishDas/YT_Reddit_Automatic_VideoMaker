@@ -3,7 +3,7 @@ import fetch_title
 import upload_to_yt 
 
 # Generate Video
-text_content = video_generation.main_video_generation_pipeline()
+text_content = video_generation.gen_vid_beta()
 
 # Generate Title and Desc
 title, description = fetch_title.generate_caption_and_description(text=text_content)
