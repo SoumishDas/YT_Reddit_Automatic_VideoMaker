@@ -10,16 +10,19 @@ import os
 import subprocess
 import random
 import glob
-import nltk
-from nltk.tokenize import sent_tokenize,word_tokenize
+import json
+import whisper
 
 import praw
 from moviepy.editor import (
     VideoFileClip,
     AudioFileClip,
+    AudioClip,
     concatenate_audioclips,
+    concatenate_videoclips,
     TextClip,
-    CompositeVideoClip
+    CompositeVideoClip,
+    ColorClip
 )
 
 ##################################
@@ -41,11 +44,8 @@ CHUNK_SIZE = 8  # Number of words per chunk (example)
 BACKGROUND_VIDEOS_FOLDER = "videos"
 VIDEO_OUTPUT_FILE = "output_videos/final_output.mp4"
 
-# Download NLTK data for sentence tokenization (only needed once)
-nltk.download('punkt_tab')
-
-
-
+# (D) Whisper model
+model = whisper.load_model("medium")
 
 
 
@@ -71,24 +71,9 @@ def generate_wav_from_text(text, output_wav):
     ]
     subprocess.run(command, input=text.encode("utf-8"), check=True)
 
-def chunk_sentence_words(sentence, chunk_size):
-    """
-    Splits a sentence into chunks of 'chunk_size' words each.
-    E.g., for 10 words and chunk_size=5, 
-    returns [ "word1 word2 word3 word4 word5", "word6 word7 word8 word9 word10" ]
-    """
-    words = word_tokenize(sentence)
-    # Group words in increments of chunk_size
-    chunks = []
-    for i in range(0, len(words), chunk_size):
-        chunk_words = words[i:i + chunk_size]
-        chunk_text = " ".join(chunk_words)
-        chunks.append(chunk_text)
-    return chunks
-
 
 ##################################
-# 3. Fetch a Reddit Post
+# Fetch a Reddit Post
 ##################################
 
 def fetch_reddit_post(verbose:bool=False) -> str:
@@ -109,85 +94,115 @@ def fetch_reddit_post(verbose:bool=False) -> str:
 
     return text_content
 
+
 ##################################
-# 4. Split into Sentences
+# Generate Audio for Text
 ##################################
 
-def sentence_tokenize(text_content:str) -> list:
-
-    sentences = sent_tokenize(text_content)
-    if not sentences:
-        raise ValueError("No sentences found in the post.")
+def wav_generation_for_whole_text(text_content:str) -> str:
     
-    return sentences
+    wav_filename = os.path.join(OUTPUT_DIR, f"audio.wav")
+    generate_wav_from_text(text_content, wav_filename)
 
-##################################
-# 5. Generate WAV for Each Sentence and Collect Durations
-##################################
-
-def wav_generation(sentences:list):
+    clip = AudioFileClip(wav_filename)
+    duration = clip.duration
     
-    # Create output directory for sentence WAVs
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    return wav_filename, duration
+
+
+
+def word_lvl_transcriptions(audiofile_path:str) -> list:
+    result = model.transcribe(audiofile_path,word_timestamps=True)
     
-    audio_clips = []
-    text_segments = []
-    current_start = 0.0
+    # each subtitle segment
+    # for each in result['segments']:
+    #     print (each)
 
-    for i, sentence in enumerate(sentences, start=1):
-        # 1) Generate WAV for this sentence
-        wav_filename = os.path.join(OUTPUT_DIR, f"sentence_{i}.wav")
-        generate_wav_from_text(sentence, wav_filename)
-        
-        # 2) Load the WAV to get its duration
-        clip = AudioFileClip(wav_filename)
-        duration = clip.duration
-        
-        # 3) Store the audio clip in a list for concatenation later
-        audio_clips.append(clip)
-        
-        # --- Split the sentence text into smaller chunks ---
-        # e.g., first 5 words for half the time, next 5 words for the second half
-        # We'll do a naive approach: total words = sum of all chunk words
-        # Then chunk time = (chunk_word_count / total_word_count) * sentence_duration
-        chunks = chunk_sentence_words(sentence, CHUNK_SIZE)
-        
-        total_words = sum(len(word_tokenize(ch)) for ch in chunks)
-        
-        # We'll track the local start time for this sentence's overlay (relative to the entire video)
-        local_time = current_start
-        
-        for chunk in chunks:
-            chunk_word_count = len(word_tokenize(chunk))
-            chunk_duration = (chunk_word_count / total_words) * duration
-            
-            text_segments.append({
-                'text': chunk,
-                'start': local_time,
-                'duration': chunk_duration
-            })
-            
-            local_time += chunk_duration
-        
-        # Advance the global timeline by this sentence's total duration
-        current_start += duration
+    wordlevel_info = []
 
-    return audio_clips, text_segments
+    for each in result['segments']:
+        words = each['words']
+        for word in words:
+            # print (word['word'], "  ",word['start']," - ",word['end'])
+            wordlevel_info.append({'word':word['word'].strip(),'start':word['start'],'end':word['end']})
+    # print(wordlevel_info)
+
+    with open('data.json', 'w') as f:
+        json.dump(wordlevel_info, f,indent=4)
+
+    return wordlevel_info
+     
+
+
+def split_text_into_lines(data):
+
+    MaxChars = 80 
+    #maxduration in seconds
+    MaxDuration = 3.0
+    #Split if nothing is spoken (gap) for these many seconds
+    MaxGap = 1.5
+
+    subtitles = []
+    line = []
+    line_duration = 0
+    line_chars = 0
+
+
+    for idx,word_data in enumerate(data):
+        word = word_data["word"]
+        start = word_data["start"]
+        end = word_data["end"]
+
+        line.append(word_data)
+        line_duration += end - start
+        
+        temp = " ".join(item["word"] for item in line)
+        
+
+        # Check if adding a new word exceeds the maximum character count or duration
+        new_line_chars = len(temp)
+
+        duration_exceeded = line_duration > MaxDuration 
+        chars_exceeded = new_line_chars > MaxChars 
+        if idx>0:
+          gap = word_data['start'] - data[idx-1]['end'] 
+          maxgap_exceeded = gap > MaxGap
+        else:
+          maxgap_exceeded = False
+        
+
+        if duration_exceeded or chars_exceeded or maxgap_exceeded:
+            if line:
+                subtitle_line = {
+                    "word": " ".join(item["word"] for item in line),
+                    "start": line[0]["start"],
+                    "end": line[-1]["end"],
+                    "textcontents": line
+                }
+                subtitles.append(subtitle_line)
+                line = []
+                line_duration = 0
+                line_chars = 0
+
+
+    if line:
+        subtitle_line = {
+            "word": " ".join(item["word"] for item in line),
+            "start": line[0]["start"],
+            "end": line[-1]["end"],
+            "textcontents": line
+        }
+        subtitles.append(subtitle_line)
+
+    
+    for line in subtitles:
+        json_str = json.dumps(line, indent=4)
+
+    return subtitles, json_str
+
 
 ##################################
-# 6. Concatenate All Audio Clips
-##################################
-
-def concatenate_audio(audio_clips):
-
-    final_audio = concatenate_audioclips(audio_clips)
-    total_audio_duration = final_audio.duration
-    print(f"Total narration length: {total_audio_duration:.2f} seconds")
-
-    return final_audio, total_audio_duration
-
-##################################
-# 7. Choose a Background Video
+# Choose a Background Video
 ##################################
 
 def choose_bg_vid(total_audio_duration):
@@ -203,46 +218,149 @@ def choose_bg_vid(total_audio_duration):
     return background_clip
 
 
+
+
+def create_caption(textJSON, framesize, font = "montserrat-bold",fontsize=60, color='white', bgcolor='blue'):
+    wordcount = len(textJSON['textcontents'])
+    full_duration = textJSON['end']-textJSON['start']
+
+    word_clips = []
+    xy_textclips_positions =[]
+    
+    x_pos = 0
+    y_pos = 0
+    # max_height = 0
+    frame_width = framesize[0]
+    frame_height = framesize[1]
+    x_buffer = frame_width*1/5
+    y_buffer = frame_height*1/3
+
+
+    for index, wordJSON in enumerate(textJSON['textcontents']):
+      duration = wordJSON['end']-wordJSON['start']
+      word_clip = TextClip(wordJSON['word'], font = font, fontsize=fontsize, color=color).set_start(textJSON['start']).set_duration(full_duration)
+      word_clip_space = TextClip(" ", font = font,fontsize=fontsize, color=color).set_start(textJSON['start']).set_duration(full_duration)
+      word_width, word_height = word_clip.size
+      space_width,space_height = word_clip_space.size
+      if x_pos + word_width+ space_width > frame_width-2*x_buffer:
+            
+            # Move to the next line
+            x_pos = 0
+            y_pos = y_pos + word_height +40
+
+            # Store info of each word_clip created
+            xy_textclips_positions.append({
+                "x_pos":x_pos+x_buffer,
+                "y_pos": y_pos+y_buffer,
+                "width" : word_width,
+                "height" : word_height,
+                "word": wordJSON['word'],
+                "start": wordJSON['start'],
+                "end": wordJSON['end'],
+                "duration": duration
+            })
+
+            word_clip = word_clip.set_position((x_pos+x_buffer, y_pos+y_buffer))
+            word_clip_space = word_clip_space.set_position((x_pos+ word_width + x_buffer, y_pos+y_buffer))
+            x_pos = word_width + space_width
+      else:
+            # Store info of each word_clip created
+            xy_textclips_positions.append({
+                "x_pos":x_pos+x_buffer,
+                "y_pos": y_pos+y_buffer,
+                "width" : word_width,
+                "height" : word_height,
+                "word": wordJSON['word'],
+                "start": wordJSON['start'],
+                "end": wordJSON['end'],
+                "duration": duration
+            })
+
+            word_clip = word_clip.set_position((x_pos+x_buffer, y_pos+y_buffer))
+            word_clip_space = word_clip_space.set_position((x_pos+ word_width+ x_buffer, y_pos+y_buffer))
+
+            x_pos = x_pos + word_width+ space_width
+
+
+      word_clips.append(word_clip)
+      word_clips.append(word_clip_space)  
+
+
+    for highlight_word in xy_textclips_positions:
+      
+      word_clip_highlight = TextClip(highlight_word['word'], font = font,fontsize=fontsize, color=color,bg_color = bgcolor).set_start(highlight_word['start']).set_duration(highlight_word['duration'])
+      word_clip_highlight = word_clip_highlight.set_position((highlight_word['x_pos'], highlight_word['y_pos']))
+      word_clips.append(word_clip_highlight)
+
+    return word_clips
+
+def gen_vid_beta(audiofilename, linelevel_subtitles, frame_size, duration):
+    all_linelevel_splits=[]
+
+    for line in linelevel_subtitles:
+        out = create_caption(line,frame_size)
+        all_linelevel_splits.extend(out)
+
+
+    # Load the input video
+    input_video = choose_bg_vid(duration).without_audio()
+    input_audio = AudioFileClip(audiofilename)
+
+    # Create a color clip with the given frame size, color, and duration
+    # background_clip = ColorClip(size=frame_size, color=(0, 0, 0)).set_duration(input_video_duration)
+
+    # If you want to overlay this on the original video uncomment this and also change frame_size, font size and color accordingly.
+    final_video = CompositeVideoClip([input_video] + all_linelevel_splits)
+
+    # final_video = CompositeVideoClip(input_video + [background_clip] + all_linelevel_splits)
+
+    final_video = final_video.set_audio(input_audio)
+
+    # Save the final clip as a video file with the audio included
+    final_video.write_videofile(VIDEO_OUTPUT_FILE, fps=24)
+    print(f"Video created: {VIDEO_OUTPUT_FILE}")
+
+
 ##################################
 # 8. Create Text Overlays
 ##################################
 
-def create_text_overlays(text_segments, background_clip):
+# def create_text_overlays(text_segments, background_clip):
 
-    text_clips = []
-    for seg in text_segments:
-        txt_clip = TextClip(
-            seg['text'],
-            fontsize=60,         
-            color='white',
-            font='montserrat-bold', 
-            method='caption',
-            size=(int(background_clip.size[0] * 0.6), None),
-            # bg_color='black',
-            stroke_color='black',
-            stroke_width=0,
-            align="center",
-        ).set_start(seg['start']) \
-        .set_duration(seg['duration']) \
-        .set_position('center')
+#     text_clips = []
+#     for seg in text_segments:
+#         txt_clip = TextClip(
+#             seg['text'],
+#             fontsize=60,         
+#             color='white',
+#             font='montserrat-bold', 
+#             method='caption',
+#             size=(int(background_clip.size[0] * 0.6), None),
+#             # bg_color='black',
+#             stroke_color='black',
+#             stroke_width=0,
+#             align="center",
+#         ).set_start(seg['start']) \
+#         .set_duration(seg['duration']) \
+#         .set_position('center')
         
-        text_clips.append(txt_clip)
+#         text_clips.append(txt_clip)
 
-    return text_clips
+#     return text_clips
 
-##################################
-# 9. Composite Final Video
-##################################
+# ##################################
+# # 9. Composite Final Video
+# ##################################
 
-def compose_final_vid(background_clip, final_audio, text_clips):
+# def compose_final_vid(background_clip, final_audio, text_clips):
 
-    final_video = CompositeVideoClip([background_clip] + text_clips)
-    final_video = final_video.set_audio(final_audio)
+#     final_video = CompositeVideoClip([background_clip] + text_clips)
+#     final_video = final_video.set_audio(final_audio)
     
-    # 10. Export the Final Video
+#     # 10. Export the Final Video
 
-    final_video.write_videofile(VIDEO_OUTPUT_FILE, fps=24)
-    print(f"Video created: {VIDEO_OUTPUT_FILE}")
+#     final_video.write_videofile(VIDEO_OUTPUT_FILE, fps=24)
+#     print(f"Video created: {VIDEO_OUTPUT_FILE}")
 
 
 ###################################
@@ -251,17 +369,28 @@ def compose_final_vid(background_clip, final_audio, text_clips):
 
 def main_video_generation_pipeline() -> str:
 
-    text_content =  fetch_reddit_post(verbose=True)
-    sentences = sentence_tokenize(text_content=text_content)
-    audio_clips, text_segments = wav_generation(sentences=sentences)
-    final_audio, total_audio_duration = concatenate_audio(audio_clips=audio_clips)
-    background_clip = choose_bg_vid(total_audio_duration=total_audio_duration)
-    text_clips = create_text_overlays(text_segments, background_clip)
-    compose_final_vid(background_clip, final_audio, text_clips)
+    text_content = fetch_reddit_post(verbose=True)
+    path, duration = wav_generation_for_whole_text(text_content)
+    word_lvl_info = word_lvl_transcriptions(path)
+    linelevel_subtitles, jsonStr = split_text_into_lines(word_lvl_info)
+    frame_size = (1920, 1080)
+    gen_vid_beta(path,linelevel_subtitles,frame_size, duration)
 
     print("Success :D")
     return text_content
 
 
+
 if __name__ == "__main__":
-    main_video_generation_pipeline()
+    # main_video_generation_pipeline()
+    # text = fetch_reddit_post(verbose=True)
+    text = '''I (27M) live with my partner (38M) of five years in central Europe, we are both immigrants. 
+
+We have two children, I will call them A(3F) and B(2F) together. 
+
+My family lives in my homeland so I am here completely alone, due my work and children I don't have any friend here. My partners family (parents, brother and sister) live close to us and he has a lot of friends which I have never met. '''
+    path, duration = wav_generation_for_whole_text(text)
+    word_lvl_info = word_lvl_transcriptions(path)
+    linelevel_subtitles, jsonStr = split_text_into_lines(word_lvl_info)
+    frame_size = (1920, 1080)
+    gen_vid_beta(path,linelevel_subtitles,frame_size, duration)
